@@ -9,7 +9,7 @@ const { imgurFileHandler } = require('../helpers/file-helpers')
 const { getOffset } = require('../helpers/pagination-helpers')
 const { relativeTimeFromNow } = require('../helpers/handlebars-helpers')
 const helpers = require('../_helpers')
-const errorHandler = require('../helpers/errors-helpers')
+const { CustomError } = require('../libs/error/custom-error')
 
 const userServices = {
   getUserEditPage: async (req, cb) => {
@@ -23,7 +23,7 @@ const userServices = {
       }
 
       const user = await User.findByPk(req.params.id, { raw: true })
-      if (!user) throw new errorHandler.UserError("User didn't exist!")
+      if (!user) throw new CustomError("User didn't exist!", 'NotFoundError')
 
       return cb(null, user)
     } catch (error) {
@@ -35,7 +35,7 @@ const userServices = {
     const emailRegex = /^\w+((-|\.)\w+)*@[A-Za-z0-9]+((-|\.)[A-Za-z0-9]+)*\.[A-Za-z]+$/
     try {
       const user = await User.findByPk(req.params.id)
-      if (!user) throw new errorHandler.UserError("User didn't exist!")
+      if (!user) throw new CustomError("User didn't exist!", 'NotFoundError')
 
       // 在 user edit model 藏一個isModel input 判斷此編輯請求從哪裡來
       const { email, name, account, password, checkPassword, introduction, isModel, notTest } = req.body
@@ -79,7 +79,7 @@ const userServices = {
 
       if (errors.length) {
         const errorMessages = errors.map(error => error.messages).join(' & ')
-        throw new errorHandler.UpdateError(errorMessages)
+        throw new CustoRmError(errorMessages, 'ValidateError')
       }
 
       // model頁沒有password ， 有才作加密
@@ -111,8 +111,8 @@ const userServices = {
     }
   },
 
-  getUserInfo: req => {
-    return User.findByPk(req.params.id, {
+  getUserInfo: (userId, followingId) => {
+    return User.findByPk(followingId, {
       attributes: {
         include: [
           [sequelize.literal('( SELECT COUNT(*) FROM Followships WHERE Followships.follower_id = User.id)'), 'followingCount'],
@@ -120,8 +120,8 @@ const userServices = {
           [sequelize.literal('( SELECT COUNT(*) FROM Tweets WHERE Tweets.user_id = User.id)'), 'tweetsCount'],
           [sequelize.literal(
               `(SELECT COUNT(*) FROM Followships
-                WHERE Followships.follower_id = ${helpers.getUser(req).id}
-                AND Followships.following_id = ${req.params.id}
+                WHERE Followships.follower_id = ${userId}
+                AND Followships.following_id = ${followingId}
               )`), 'isFollowed']
         ]
       },
@@ -130,8 +130,7 @@ const userServices = {
     })
   },
 
-  getFollowings: async req => {
-    const userId = req.params.id
+  getFollowings: async userId => {
     const userWithfollowings = await User.findByPk(userId, {
       include: [
         {
@@ -162,8 +161,7 @@ const userServices = {
     return userWithfollowings.toJSON()
   },
 
-  getFollowers: async req => {
-    const userId = req.params.id
+  getFollowers: async userId => {
     const userWithfollowers = await User.findByPk(userId, {
       include: [
         {
@@ -194,10 +192,10 @@ const userServices = {
     return userWithfollowers.toJSON()
   },
 
-  topFollowedUser: req => {
+  topFollowedUser: userId => {
     return User.findAll({
       where: {
-        id: { [Op.ne]: helpers.getUser(req).id }, // 不要出現登入帳號
+        id: { [Op.ne]: userId }, // 不要出現登入帳號
         role: { [Op.ne]: 'admin' } // admin不推薦, ne = not
       },
       attributes: {
@@ -207,7 +205,7 @@ const userServices = {
           // req.user是追別人的,  findAll的user是被追的人
           [sequelize.literal(
             `(SELECT COUNT(*) FROM Followships
-              WHERE Followships.follower_id = ${helpers.getUser(req).id}
+              WHERE Followships.follower_id = ${userId}
               AND Followships.following_id = User.id
             )`), 'isFollowed'] // 查看此User是否已追蹤
         ]
@@ -218,9 +216,7 @@ const userServices = {
       nest: true
     })
   },
-  getUserTweets: async (req, limit = 8, page = 0) => {
-    const viewingUserId = req.params.id
-    const loggingUserId = helpers.getUser(req).id
+  getUserTweets: async (viewingUserId, loggingUserId, { limit = 8, page = 0 } = {}) => {
     const offset = getOffset(limit, page)
     const tweets = await Tweet.findAll({
       include: [
@@ -244,15 +240,13 @@ const userServices = {
       limit
     })
     tweets.forEach(tweet => {
-      tweet.createdAt = relativeTimeFromNow(tweet.createdAt)
+      tweet.createdFromNow = relativeTimeFromNow(tweet.createdAt)
     })
     return tweets
   },
 
-  getLikeTweets: async (req, limit = 8, page = 0) => {
+  getLikeTweets: async (viewingUserId, loggingUserId, { limit = 8, page = 0 }) => {
     const offset = getOffset(limit, page)
-    const viewingUserId = req.params.id
-    const loggingUserId = helpers.getUser(req).id
 
     let tweets = await Tweet.findAll({
       include: [
@@ -283,13 +277,12 @@ const userServices = {
     })
     tweets = tweets.map(tweet => {
       tweet = tweet.toJSON()
-      tweet.createdAt = relativeTimeFromNow(tweet.createdAt)
+      tweet.createdFromNow = relativeTimeFromNow(tweet.createdAt)
       return tweet
     })
     return tweets
   },
-  getUserReplies: async (req, limit = 8, page = 0) => {
-    const viewingUserId = req.params.id
+  getUserReplies: async (viewingUserId, { limit = 8, page = 0 } = {}) => {
     const offset = getOffset(limit, page)
     const replies = await Reply.findAll({
       where: {
@@ -319,7 +312,7 @@ const userServices = {
       limit
     })
     replies.forEach(reply => {
-      reply.createdAt = relativeTimeFromNow(reply.createdAt)
+      reply.createdFromNow = relativeTimeFromNow(reply.createdAt)
     })
     return replies
   }
